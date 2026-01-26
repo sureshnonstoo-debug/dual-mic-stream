@@ -26,17 +26,29 @@ const Index = () => {
 
   const audioContextRef = useRef<AudioContext | null>(null);
 
-  const handleAudioData = useCallback((data: AudioData) => {
-    setAudioData(data);
-
-    // Play audio if enabled
+  // Initialize AudioContext on user interaction
+  const getAudioContext = useCallback(async () => {
     if (!audioContextRef.current) {
       audioContextRef.current = new AudioContext({ sampleRate: 16000 });
     }
+    // Resume if suspended (browser autoplay policy)
+    if (audioContextRef.current.state === 'suspended') {
+      await audioContextRef.current.resume();
+    }
+    return audioContextRef.current;
+  }, []);
 
-    const ctx = audioContextRef.current;
+  const handleAudioData = useCallback(async (data: AudioData) => {
+    setAudioData(data);
 
-    if (playingLeft && !mutedLeft) {
+    // Only play if at least one channel is enabled
+    if ((!playingLeft || mutedLeft) && (!playingRight || mutedRight)) {
+      return;
+    }
+
+    const ctx = await getAudioContext();
+
+    if (playingLeft && !mutedLeft && data.left.length > 0) {
       const buffer = ctx.createBuffer(1, data.left.length, 16000);
       const channelData = buffer.getChannelData(0);
       for (let i = 0; i < data.left.length; i++) {
@@ -48,7 +60,7 @@ const Index = () => {
       source.start();
     }
 
-    if (playingRight && !mutedRight) {
+    if (playingRight && !mutedRight && data.right.length > 0) {
       const buffer = ctx.createBuffer(1, data.right.length, 16000);
       const channelData = buffer.getChannelData(0);
       for (let i = 0; i < data.right.length; i++) {
@@ -59,7 +71,7 @@ const Index = () => {
       source.connect(ctx.destination);
       source.start();
     }
-  }, [playingLeft, playingRight, mutedLeft, mutedRight]);
+  }, [playingLeft, playingRight, mutedLeft, mutedRight, getAudioContext]);
 
   const bluetooth = useBluetooth(handleAudioData);
 
