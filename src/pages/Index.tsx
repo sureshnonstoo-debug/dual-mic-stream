@@ -53,10 +53,12 @@ const Index = () => {
   const getAudioContext = useCallback(async () => {
     if (!audioContextRef.current) {
       audioContextRef.current = new AudioContext({ sampleRate: 16000 });
+      console.log('AudioContext created, state:', audioContextRef.current.state);
     }
     // Resume if suspended (browser autoplay policy)
     if (audioContextRef.current.state === 'suspended') {
       await audioContextRef.current.resume();
+      console.log('AudioContext resumed, state:', audioContextRef.current.state);
     }
 
     // Output chain: (Left + Right) -> Master -> Destination
@@ -74,6 +76,8 @@ const Index = () => {
       masterGainRef.current = master;
       leftGainRef.current = left;
       rightGainRef.current = right;
+      
+      console.log('Audio gain chain initialized');
     }
 
     applyGainValues();
@@ -108,9 +112,19 @@ const Index = () => {
       return;
     }
 
-    const ctx = await getAudioContext();
-    const leftOut = leftGainRef.current ?? masterGainRef.current ?? ctx.destination;
-    const rightOut = rightGainRef.current ?? masterGainRef.current ?? ctx.destination;
+    const ctx = audioContextRef.current;
+    if (!ctx || ctx.state !== 'running') {
+      console.warn('AudioContext not running, state:', ctx?.state);
+      return;
+    }
+
+    const leftOut = leftGainRef.current;
+    const rightOut = rightGainRef.current;
+
+    if (!leftOut || !rightOut) {
+      console.warn('Gain nodes not initialized');
+      return;
+    }
 
     if (playingLeft && !mutedLeft && data.left.length > 0) {
       const buffer = ctx.createBuffer(1, data.left.length, 16000);
@@ -141,7 +155,7 @@ const Index = () => {
       source.start(startAt);
       nextRightTimeRef.current = startAt + buffer.duration;
     }
-  }, [playingLeft, playingRight, mutedLeft, mutedRight, getAudioContext]);
+  }, [playingLeft, playingRight, mutedLeft, mutedRight]);
 
   const bluetooth = useBluetooth(handleAudioData);
 
