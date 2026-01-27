@@ -148,38 +148,42 @@ const Index = () => {
       const buffer = ctx.createBuffer(1, data.left.length, 16000);
       const channelData = buffer.getChannelData(0);
       for (let i = 0; i < data.left.length; i++) {
-        // Normalize and apply soft clipping to reduce distortion
-        const sample = data.left[i] / 32768;
-        channelData[i] = Math.tanh(sample); // Soft clip
+        channelData[i] = data.left[i] / 32768;
       }
       const source = ctx.createBufferSource();
       source.buffer = buffer;
 
       const startAt = Math.max(ctx.currentTime + 0.02, nextLeftTimeRef.current);
-      // Connect to filter instead of gain directly
-      const filterNode = leftFilterRef.current ?? leftOut;
-      source.connect(filterNode);
+      // Connect to filter (filter -> gain -> master -> destination)
+      if (leftFilterRef.current) {
+        source.connect(leftFilterRef.current);
+      } else {
+        source.connect(leftOut);
+      }
       source.start(startAt);
       nextLeftTimeRef.current = startAt + buffer.duration;
+      console.log('Left audio scheduled at', startAt, 'samples:', data.left.length);
     }
 
     if (playingRight && !mutedRight && data.right.length > 0) {
       const buffer = ctx.createBuffer(1, data.right.length, 16000);
       const channelData = buffer.getChannelData(0);
       for (let i = 0; i < data.right.length; i++) {
-        // Normalize and apply soft clipping to reduce distortion
-        const sample = data.right[i] / 32768;
-        channelData[i] = Math.tanh(sample); // Soft clip
+        channelData[i] = data.right[i] / 32768;
       }
       const source = ctx.createBufferSource();
       source.buffer = buffer;
 
       const startAt = Math.max(ctx.currentTime + 0.02, nextRightTimeRef.current);
-      // Connect to filter instead of gain directly
-      const filterNode = rightFilterRef.current ?? rightOut;
-      source.connect(filterNode);
+      // Connect to filter (filter -> gain -> master -> destination)
+      if (rightFilterRef.current) {
+        source.connect(rightFilterRef.current);
+      } else {
+        source.connect(rightOut);
+      }
       source.start(startAt);
       nextRightTimeRef.current = startAt + buffer.duration;
+      console.log('Right audio scheduled at', startAt, 'samples:', data.right.length);
     }
   }, [playingLeft, playingRight, mutedLeft, mutedRight]);
 
