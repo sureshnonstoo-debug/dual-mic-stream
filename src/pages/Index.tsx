@@ -34,6 +34,8 @@ const Index = () => {
   const masterGainRef = useRef<GainNode | null>(null);
   const leftGainRef = useRef<GainNode | null>(null);
   const rightGainRef = useRef<GainNode | null>(null);
+  const leftFilterRef = useRef<BiquadFilterNode | null>(null);
+  const rightFilterRef = useRef<BiquadFilterNode | null>(null);
 
   // Simple jitter-buffer scheduling so packets play back-to-back
   const nextLeftTimeRef = useRef<number>(0);
@@ -61,7 +63,7 @@ const Index = () => {
       console.log('AudioContext resumed, state:', audioContextRef.current.state);
     }
 
-    // Output chain: (Left + Right) -> Master -> Destination
+    // Output chain: Source -> LowPass Filter -> Gain -> Master -> Destination
     if (!masterGainRef.current || !leftGainRef.current || !rightGainRef.current) {
       const ctx = audioContextRef.current;
 
@@ -69,6 +71,20 @@ const Index = () => {
       const left = ctx.createGain();
       const right = ctx.createGain();
 
+      // Low-pass filters to reduce high-frequency noise (cutoff at 7kHz for 16kHz sample rate)
+      const leftFilter = ctx.createBiquadFilter();
+      leftFilter.type = 'lowpass';
+      leftFilter.frequency.value = 7000;
+      leftFilter.Q.value = 0.7;
+
+      const rightFilter = ctx.createBiquadFilter();
+      rightFilter.type = 'lowpass';
+      rightFilter.frequency.value = 7000;
+      rightFilter.Q.value = 0.7;
+
+      // Chain: Filter -> Gain -> Master -> Destination
+      leftFilter.connect(left);
+      rightFilter.connect(right);
       left.connect(master);
       right.connect(master);
       master.connect(ctx.destination);
@@ -76,8 +92,10 @@ const Index = () => {
       masterGainRef.current = master;
       leftGainRef.current = left;
       rightGainRef.current = right;
+      leftFilterRef.current = leftFilter;
+      rightFilterRef.current = rightFilter;
       
-      console.log('Audio gain chain initialized');
+      console.log('Audio gain chain with filters initialized');
     }
 
     applyGainValues();
@@ -130,13 +148,17 @@ const Index = () => {
       const buffer = ctx.createBuffer(1, data.left.length, 16000);
       const channelData = buffer.getChannelData(0);
       for (let i = 0; i < data.left.length; i++) {
-        channelData[i] = data.left[i] / 32768;
+        // Normalize and apply soft clipping to reduce distortion
+        const sample = data.left[i] / 32768;
+        channelData[i] = Math.tanh(sample); // Soft clip
       }
       const source = ctx.createBufferSource();
       source.buffer = buffer;
 
       const startAt = Math.max(ctx.currentTime + 0.02, nextLeftTimeRef.current);
-      source.connect(leftOut);
+      // Connect to filter instead of gain directly
+      const filterNode = leftFilterRef.current ?? leftOut;
+      source.connect(filterNode);
       source.start(startAt);
       nextLeftTimeRef.current = startAt + buffer.duration;
     }
@@ -145,13 +167,17 @@ const Index = () => {
       const buffer = ctx.createBuffer(1, data.right.length, 16000);
       const channelData = buffer.getChannelData(0);
       for (let i = 0; i < data.right.length; i++) {
-        channelData[i] = data.right[i] / 32768;
+        // Normalize and apply soft clipping to reduce distortion
+        const sample = data.right[i] / 32768;
+        channelData[i] = Math.tanh(sample); // Soft clip
       }
       const source = ctx.createBufferSource();
       source.buffer = buffer;
 
       const startAt = Math.max(ctx.currentTime + 0.02, nextRightTimeRef.current);
-      source.connect(rightOut);
+      // Connect to filter instead of gain directly
+      const filterNode = rightFilterRef.current ?? rightOut;
+      source.connect(filterNode);
       source.start(startAt);
       nextRightTimeRef.current = startAt + buffer.duration;
     }
