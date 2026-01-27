@@ -25,6 +25,7 @@ const Index = () => {
   const [mutedRight, setMutedRight] = useState(false);
 
   const audioContextRef = useRef<AudioContext | null>(null);
+  const outputGainRef = useRef<GainNode | null>(null);
 
   // Initialize AudioContext on user interaction
   const getAudioContext = useCallback(async () => {
@@ -35,8 +36,28 @@ const Index = () => {
     if (audioContextRef.current.state === 'suspended') {
       await audioContextRef.current.resume();
     }
+
+    // Create a single output chain (and add a bit of gain so it's audible)
+    if (!outputGainRef.current) {
+      const gain = audioContextRef.current.createGain();
+      gain.gain.value = 2.5;
+      gain.connect(audioContextRef.current.destination);
+      outputGainRef.current = gain;
+    }
+
     return audioContextRef.current;
   }, []);
+
+  // IMPORTANT: resume AudioContext in direct response to user gesture (click)
+  const togglePlayLeft = useCallback(() => {
+    void getAudioContext();
+    setPlayingLeft((v) => !v);
+  }, [getAudioContext]);
+
+  const togglePlayRight = useCallback(() => {
+    void getAudioContext();
+    setPlayingRight((v) => !v);
+  }, [getAudioContext]);
 
   const handleAudioData = useCallback(async (data: AudioData) => {
     setAudioData(data);
@@ -47,6 +68,7 @@ const Index = () => {
     }
 
     const ctx = await getAudioContext();
+    const output = outputGainRef.current ?? ctx.destination;
 
     if (playingLeft && !mutedLeft && data.left.length > 0) {
       const buffer = ctx.createBuffer(1, data.left.length, 16000);
@@ -56,7 +78,7 @@ const Index = () => {
       }
       const source = ctx.createBufferSource();
       source.buffer = buffer;
-      source.connect(ctx.destination);
+      source.connect(output);
       source.start();
     }
 
@@ -68,7 +90,7 @@ const Index = () => {
       }
       const source = ctx.createBufferSource();
       source.buffer = buffer;
-      source.connect(ctx.destination);
+      source.connect(output);
       source.start();
     }
   }, [playingLeft, playingRight, mutedLeft, mutedRight, getAudioContext]);
@@ -137,7 +159,7 @@ const Index = () => {
                 color="left"
                 isPlaying={playingLeft}
                 isMuted={mutedLeft}
-                onTogglePlay={() => setPlayingLeft(!playingLeft)}
+                onTogglePlay={togglePlayLeft}
                 onToggleMute={() => setMutedLeft(!mutedLeft)}
               />
             </div>
@@ -162,7 +184,7 @@ const Index = () => {
                 color="right"
                 isPlaying={playingRight}
                 isMuted={mutedRight}
-                onTogglePlay={() => setPlayingRight(!playingRight)}
+                onTogglePlay={togglePlayRight}
                 onToggleMute={() => setMutedRight(!mutedRight)}
               />
             </div>
