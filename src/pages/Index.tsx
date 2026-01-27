@@ -4,6 +4,7 @@ import { ConnectionStatus } from '@/components/ConnectionStatus';
 import { WaveformVisualizer } from '@/components/WaveformVisualizer';
 import { AudioControls } from '@/components/AudioControls';
 import { ESP32CodeModal } from '@/components/ESP32CodeModal';
+import { OutputVolumePanel } from '@/components/OutputVolumePanel';
 import { Button } from '@/components/ui/button';
 import { useBluetooth, AudioData } from '@/hooks/useBluetooth';
 
@@ -24,8 +25,29 @@ const Index = () => {
   const [mutedLeft, setMutedLeft] = useState(false);
   const [mutedRight, setMutedRight] = useState(false);
 
+  // Volume (GainNode multipliers)
+  const [masterVolume, setMasterVolume] = useState(2.5);
+  const [leftVolume, setLeftVolume] = useState(1.0);
+  const [rightVolume, setRightVolume] = useState(1.0);
+
   const audioContextRef = useRef<AudioContext | null>(null);
-  const outputGainRef = useRef<GainNode | null>(null);
+  const masterGainRef = useRef<GainNode | null>(null);
+  const leftGainRef = useRef<GainNode | null>(null);
+  const rightGainRef = useRef<GainNode | null>(null);
+
+  // Simple jitter-buffer scheduling so packets play back-to-back
+  const nextLeftTimeRef = useRef<number>(0);
+  const nextRightTimeRef = useRef<number>(0);
+
+  const applyGainValues = useCallback(() => {
+    const ctx = audioContextRef.current;
+    if (!ctx) return;
+
+    const t = ctx.currentTime;
+    masterGainRef.current?.gain.setTargetAtTime(masterVolume, t, 0.01);
+    leftGainRef.current?.gain.setTargetAtTime(mutedLeft ? 0 : leftVolume, t, 0.01);
+    rightGainRef.current?.gain.setTargetAtTime(mutedRight ? 0 : rightVolume, t, 0.01);
+  }, [masterVolume, leftVolume, rightVolume, mutedLeft, mutedRight]);
 
   // Initialize AudioContext on user interaction
   const getAudioContext = useCallback(async () => {
@@ -37,25 +59,44 @@ const Index = () => {
       await audioContextRef.current.resume();
     }
 
-    // Create a single output chain (and add a bit of gain so it's audible)
-    if (!outputGainRef.current) {
-      const gain = audioContextRef.current.createGain();
-      gain.gain.value = 2.5;
-      gain.connect(audioContextRef.current.destination);
-      outputGainRef.current = gain;
+    // Output chain: (Left + Right) -> Master -> Destination
+    if (!masterGainRef.current || !leftGainRef.current || !rightGainRef.current) {
+      const ctx = audioContextRef.current;
+
+      const master = ctx.createGain();
+      const left = ctx.createGain();
+      const right = ctx.createGain();
+
+      left.connect(master);
+      right.connect(master);
+      master.connect(ctx.destination);
+
+      masterGainRef.current = master;
+      leftGainRef.current = left;
+      rightGainRef.current = right;
     }
 
+    applyGainValues();
+
     return audioContextRef.current;
-  }, []);
+  }, [applyGainValues]);
+
+  useEffect(() => {
+    applyGainValues();
+  }, [applyGainValues]);
 
   // IMPORTANT: resume AudioContext in direct response to user gesture (click)
   const togglePlayLeft = useCallback(() => {
     void getAudioContext();
+    const ctx = audioContextRef.current;
+    if (ctx) nextLeftTimeRef.current = ctx.currentTime + 0.03;
     setPlayingLeft((v) => !v);
   }, [getAudioContext]);
 
   const togglePlayRight = useCallback(() => {
     void getAudioContext();
+    const ctx = audioContextRef.current;
+    if (ctx) nextRightTimeRef.current = ctx.currentTime + 0.03;
     setPlayingRight((v) => !v);
   }, [getAudioContext]);
 
@@ -68,7 +109,8 @@ const Index = () => {
     }
 
     const ctx = await getAudioContext();
-    const output = outputGainRef.current ?? ctx.destination;
+    const leftOut = leftGainRef.current ?? masterGainRef.current ?? ctx.destination;
+    const rightOut = rightGainRef.current ?? masterGainRef.current ?? ctx.destination;
 
     if (playingLeft && !mutedLeft && data.left.length > 0) {
       const buffer = ctx.createBuffer(1, data.left.length, 16000);
@@ -78,8 +120,11 @@ const Index = () => {
       }
       const source = ctx.createBufferSource();
       source.buffer = buffer;
-      source.connect(output);
-      source.start();
+
+      const startAt = Math.max(ctx.currentTime + 0.02, nextLeftTimeRef.current);
+      source.connect(leftOut);
+      source.start(startAt);
+      nextLeftTimeRef.current = startAt + buffer.duration;
     }
 
     if (playingRight && !mutedRight && data.right.length > 0) {
@@ -90,8 +135,11 @@ const Index = () => {
       }
       const source = ctx.createBufferSource();
       source.buffer = buffer;
-      source.connect(output);
-      source.start();
+
+      const startAt = Math.max(ctx.currentTime + 0.02, nextRightTimeRef.current);
+      source.connect(rightOut);
+      source.start(startAt);
+      nextRightTimeRef.current = startAt + buffer.duration;
     }
   }, [playingLeft, playingRight, mutedLeft, mutedRight, getAudioContext]);
 
@@ -143,6 +191,15 @@ const Index = () => {
             onDisconnect={bluetooth.disconnect}
           />
         </section>
+
+        <OutputVolumePanel
+          master={masterVolume}
+          left={leftVolume}
+          right={rightVolume}
+          onMasterChange={setMasterVolume}
+          onLeftChange={setLeftVolume}
+          onRightChange={setRightVolume}
+        />
 
         {/* Audio Channels */}
         <section className="grid gap-8 lg:grid-cols-2">
