@@ -28,7 +28,7 @@ const Index = () => {
   // Volume (GainNode multipliers)
   const [masterVolume, setMasterVolume] = useState(2.5);
   const [leftVolume, setLeftVolume] = useState(1.0);
-  const [rightVolume, setRightVolume] = useState(1.0);
+  const [rightVolume, setRightVolume] = useState(3.0); // Higher default for SmartElex
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const masterGainRef = useRef<GainNode | null>(null);
@@ -36,6 +36,8 @@ const Index = () => {
   const rightGainRef = useRef<GainNode | null>(null);
   const leftFilterRef = useRef<BiquadFilterNode | null>(null);
   const rightFilterRef = useRef<BiquadFilterNode | null>(null);
+  const leftHighPassRef = useRef<BiquadFilterNode | null>(null);
+  const rightHighPassRef = useRef<BiquadFilterNode | null>(null);
 
   // Simple jitter-buffer scheduling so packets play back-to-back
   const nextLeftTimeRef = useRef<number>(0);
@@ -79,8 +81,23 @@ const Index = () => {
 
       const rightFilter = ctx.createBiquadFilter();
       rightFilter.type = 'lowpass';
-      rightFilter.frequency.value = 7000;
-      rightFilter.Q.value = 0.7;
+      rightFilter.frequency.value = 5000; // Lower cutoff for SmartElex to reduce more noise
+      rightFilter.Q.value = 0.5;
+
+      // High-pass filters to remove low-frequency rumble/echo
+      const leftHighPass = ctx.createBiquadFilter();
+      leftHighPass.type = 'highpass';
+      leftHighPass.frequency.value = 80;
+      leftHighPass.Q.value = 0.7;
+
+      const rightHighPass = ctx.createBiquadFilter();
+      rightHighPass.type = 'highpass';
+      rightHighPass.frequency.value = 150; // Higher cutoff for SmartElex to reduce echo/rumble
+      rightHighPass.Q.value = 0.7;
+
+      // Chain: HighPass -> LowPass -> Gain -> Master -> Destination
+      leftHighPass.connect(leftFilter);
+      rightHighPass.connect(rightFilter);
 
       // Chain: Filter -> Gain -> Master -> Destination
       leftFilter.connect(left);
@@ -94,6 +111,8 @@ const Index = () => {
       rightGainRef.current = right;
       leftFilterRef.current = leftFilter;
       rightFilterRef.current = rightFilter;
+      leftHighPassRef.current = leftHighPass;
+      rightHighPassRef.current = rightHighPass;
       
       console.log('Audio gain chain with filters initialized');
     }
@@ -147,43 +166,53 @@ const Index = () => {
     if (playingLeft && !mutedLeft && data.left.length > 0) {
       const buffer = ctx.createBuffer(1, data.left.length, 16000);
       const channelData = buffer.getChannelData(0);
+      
+      // Apply noise gate - silence very quiet samples
+      const noiseThreshold = 0.01;
       for (let i = 0; i < data.left.length; i++) {
-        channelData[i] = data.left[i] / 32768;
+        const sample = data.left[i] / 32768;
+        channelData[i] = Math.abs(sample) < noiseThreshold ? 0 : sample;
       }
       const source = ctx.createBufferSource();
       source.buffer = buffer;
 
       const startAt = Math.max(ctx.currentTime + 0.02, nextLeftTimeRef.current);
-      // Connect to filter (filter -> gain -> master -> destination)
-      if (leftFilterRef.current) {
+      // Connect to high-pass filter (highpass -> lowpass -> gain -> master -> destination)
+      if (leftHighPassRef.current) {
+        source.connect(leftHighPassRef.current);
+      } else if (leftFilterRef.current) {
         source.connect(leftFilterRef.current);
       } else {
         source.connect(leftOut);
       }
       source.start(startAt);
       nextLeftTimeRef.current = startAt + buffer.duration;
-      console.log('Left audio scheduled at', startAt, 'samples:', data.left.length);
     }
 
     if (playingRight && !mutedRight && data.right.length > 0) {
       const buffer = ctx.createBuffer(1, data.right.length, 16000);
       const channelData = buffer.getChannelData(0);
+      
+      // Apply stronger noise gate for SmartElex
+      const noiseThreshold = 0.02;
       for (let i = 0; i < data.right.length; i++) {
-        channelData[i] = data.right[i] / 32768;
+        const sample = data.right[i] / 32768;
+        channelData[i] = Math.abs(sample) < noiseThreshold ? 0 : sample;
       }
       const source = ctx.createBufferSource();
       source.buffer = buffer;
 
       const startAt = Math.max(ctx.currentTime + 0.02, nextRightTimeRef.current);
-      // Connect to filter (filter -> gain -> master -> destination)
-      if (rightFilterRef.current) {
+      // Connect to high-pass filter (highpass -> lowpass -> gain -> master -> destination)
+      if (rightHighPassRef.current) {
+        source.connect(rightHighPassRef.current);
+      } else if (rightFilterRef.current) {
         source.connect(rightFilterRef.current);
       } else {
         source.connect(rightOut);
       }
       source.start(startAt);
       nextRightTimeRef.current = startAt + buffer.duration;
-      console.log('Right audio scheduled at', startAt, 'samples:', data.right.length);
     }
   }, [playingLeft, playingRight, mutedLeft, mutedRight]);
 
